@@ -64,21 +64,21 @@ jobs:
         include-compare: false
         semver: false
 
-    - name: Create Release
+#    - name: Create Release
 #      if: ${{ steps.regex-match.outputs.match != '' }}
-      id: create_release
-      uses: ncipollo/release-action@v1.13.0
-      with:
-        artifacts: ${{steps.sign_app.outputs.signedReleaseFile}}
-        body: ${{ steps.changelog.outputs.changelog }}
-        tag: ${{ github.event.head_commit.message }}
-        name: Release ${{ github.event.head_commit.message }}
+#      id: create_release
+#      uses: ncipollo/release-action@v1.13.0
+#      with:
+#        artifacts: ${{steps.sign_app.outputs.signedReleaseFile}}
+#        body: ${{ steps.changelog.outputs.changelog }}
+#        tag: ${{ github.event.head_commit.message }}
+#        name: Release ${{ github.event.head_commit.message }}
 #        token: ${{ secrets.GITHUB_TOKEN }}
 
-#    - name: Release the Package
-#      uses: softprops/action-gh-release@v2
-#      with:
-#        files: openfortivpn*.deb
+    - name: Release the Package
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ${{steps.sign_app.outputs.signedReleaseFile}}
 
     - name: 'Upload Artifact'
       uses: actions/upload-artifact@v4
