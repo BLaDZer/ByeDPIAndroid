@@ -41,7 +41,7 @@ jobs:
       id: regex-match
       with:
         text: ${{ github.event.head_commit.message }}
-        regex: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+        regex: '^v[0-9]+\.[0-9]+\.[0-9]+'
 
     - name: Sign App
 #      if: ${{ steps.regex-match.outputs.match != '' }}
