@@ -14,10 +14,12 @@ import io.github.dovecoteescapee.byedpi.data.*
 import io.github.dovecoteescapee.byedpi.utility.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 class ByeDpiProxyService : LifecycleService() {
     private var proxy = ByeDpiProxy()
@@ -70,11 +72,11 @@ class ByeDpiProxyService : LifecycleService() {
         }
 
         try {
+            startForeground()
             mutex.withLock {
                 startProxy()
             }
             updateStatus(ServiceStatus.Connected)
-            startForeground()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start proxy", e)
             updateStatus(ServiceStatus.Failed)
@@ -96,16 +98,19 @@ class ByeDpiProxyService : LifecycleService() {
     }
 
     private suspend fun stop() {
-        Log.i(TAG, "Stopping VPN")
+        Log.i(TAG, "Stopping")
 
         mutex.withLock {
-            stopProxy()
+            withContext(Dispatchers.IO) {
+                stopProxy()
+            }
         }
+
         updateStatus(ServiceStatus.Disconnected)
         stopSelf()
     }
 
-    private suspend fun startProxy() {
+    private fun startProxy() {
         Log.i(TAG, "Starting proxy")
 
         if (proxyJob != null) {
@@ -118,15 +123,16 @@ class ByeDpiProxyService : LifecycleService() {
 
         proxyJob = lifecycleScope.launch(Dispatchers.IO) {
             val code = proxy.startProxy(preferences)
+            delay(500)
 
-            withContext(Dispatchers.Main) {
-                if (code != 0) {
-                    Log.e(TAG, "Proxy stopped with code $code")
-                    updateStatus(ServiceStatus.Failed)
-                } else {
-                    updateStatus(ServiceStatus.Disconnected)
-                }
+            if (code != 0) {
+                Log.e(TAG, "Proxy stopped with code $code")
+                updateStatus(ServiceStatus.Failed)
+            } else {
+                updateStatus(ServiceStatus.Disconnected)
             }
+
+            stopSelf()
         }
 
         Log.i(TAG, "Proxy started")
@@ -140,9 +146,23 @@ class ByeDpiProxyService : LifecycleService() {
             return
         }
 
-        proxy.stopProxy()
-        proxyJob?.join()
-        proxyJob = null
+        try {
+            proxy.stopProxy()
+            proxyJob?.cancel()
+
+            val completed = withTimeoutOrNull(1000) {
+                proxyJob?.join()
+            }
+
+            if (completed == null) {
+                Log.w(TAG, "proxy not finish in time, cancelling...")
+                proxy.jniForceClose()
+            }
+
+            proxyJob = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to close proxyJob", e)
+        }
 
         Log.i(TAG, "Proxy stopped")
     }

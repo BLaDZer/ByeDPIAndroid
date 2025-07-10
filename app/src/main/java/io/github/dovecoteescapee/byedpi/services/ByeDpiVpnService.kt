@@ -17,18 +17,21 @@ import io.github.dovecoteescapee.byedpi.data.*
 import io.github.dovecoteescapee.byedpi.utility.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.Socket
 
 class ByeDpiVpnService : LifecycleVpnService() {
     private val byeDpiProxy = ByeDpiProxy()
     private var proxyJob: Job? = null
     private var tunFd: ParcelFileDescriptor? = null
     private val mutex = Mutex()
-    private var stopping: Boolean = false
 
     companion object {
         private val TAG: String = ByeDpiVpnService::class.java.simpleName
@@ -72,6 +75,22 @@ class ByeDpiVpnService : LifecycleVpnService() {
         lifecycleScope.launch { stop() }
     }
 
+    private suspend fun isProxyRunning(): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val (ip, port) = getPreferences().getProxyIpAndPort()
+
+                Socket().use { socket ->
+                    socket.connect(InetSocketAddress(ip, port.toInt()), 1000)
+                    true
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Proxy connection check failed", e)
+                false
+            }
+        }
+    }
+
     private suspend fun start() {
         Log.i(TAG, "Starting")
 
@@ -81,12 +100,20 @@ class ByeDpiVpnService : LifecycleVpnService() {
         }
 
         try {
+            startForeground()
             mutex.withLock {
                 startProxy()
-                startTun2Socks()
+                lifecycleScope.launch(Dispatchers.IO) {
+                    delay(500)
+                    if (isProxyRunning()) {
+                        startTun2Socks()
+                    } else {
+                        Log.e(TAG, "Proxy not running, stop service")
+                        stopSelf()
+                    }
+                }
             }
             updateStatus(ServiceStatus.Connected)
-            startForeground()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start VPN", e)
             updateStatus(ServiceStatus.Failed)
@@ -111,14 +138,13 @@ class ByeDpiVpnService : LifecycleVpnService() {
         Log.i(TAG, "Stopping")
 
         mutex.withLock {
-            stopping = true
             try {
-                stopTun2Socks()
-                stopProxy()
+                withContext(Dispatchers.IO) {
+                    stopTun2Socks()
+                    stopProxy()
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to stop VPN", e)
-            } finally {
-                stopping = false
             }
         }
 
@@ -126,7 +152,7 @@ class ByeDpiVpnService : LifecycleVpnService() {
         stopSelf()
     }
 
-    private suspend fun startProxy() {
+    private fun startProxy() {
         Log.i(TAG, "Starting proxy")
 
         if (proxyJob != null) {
@@ -138,18 +164,17 @@ class ByeDpiVpnService : LifecycleVpnService() {
 
         proxyJob = lifecycleScope.launch(Dispatchers.IO) {
             val code = byeDpiProxy.startProxy(preferences)
+            delay(500)
 
-            withContext(Dispatchers.Main) {
-                if (code != 0) {
-                    Log.e(TAG, "Proxy stopped with code $code")
-                    updateStatus(ServiceStatus.Failed)
-                } else {
-                    if (!stopping) {
-                        stop()
-                        updateStatus(ServiceStatus.Disconnected)
-                    }
-                }
+            if (code != 0) {
+                Log.e(TAG, "Proxy stopped with code $code")
+                updateStatus(ServiceStatus.Failed)
+            } else {
+                updateStatus(ServiceStatus.Disconnected)
             }
+
+            stopTun2Socks()
+            stopSelf()
         }
 
         Log.i(TAG, "Proxy started")
@@ -163,9 +188,23 @@ class ByeDpiVpnService : LifecycleVpnService() {
             return
         }
 
-        byeDpiProxy.stopProxy()
-        proxyJob?.join() ?: throw IllegalStateException("ProxyJob field null")
-        proxyJob = null
+        try {
+            byeDpiProxy.stopProxy()
+            proxyJob?.cancel()
+
+            val completed = withTimeoutOrNull(1000) {
+                proxyJob?.join()
+            }
+
+            if (completed == null) {
+                Log.w(TAG, "proxy not finish in time, cancelling...")
+                byeDpiProxy.jniForceClose()
+            }
+
+            proxyJob = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to close proxyJob", e)
+        }
 
         Log.i(TAG, "Proxy stopped")
     }
@@ -178,8 +217,9 @@ class ByeDpiVpnService : LifecycleVpnService() {
         }
 
         val sharedPreferences = getPreferences()
-        val port = sharedPreferences.getString("byedpi_proxy_port", null)?.toInt() ?: 1080
-        val dns = sharedPreferences.getStringNotNull("dns_ip", "1.1.1.1")
+        val (ip, port) = sharedPreferences.getProxyIpAndPort()
+
+        val dns = sharedPreferences.getStringNotNull("dns_ip", "8.8.8.8")
         val ipv6 = sharedPreferences.getBoolean("ipv6_enable", false)
 
         val tun2socksConfig = """
@@ -187,7 +227,7 @@ class ByeDpiVpnService : LifecycleVpnService() {
         |   task-stack-size: 81920
         | socks5:
         |   mtu: 8500
-        |   address: 127.0.0.1
+        |   address: $ip
         |   port: $port
         |   udp: udp
         """.trimMargin("| ")
@@ -208,13 +248,17 @@ class ByeDpiVpnService : LifecycleVpnService() {
 
         TProxyService.TProxyStartService(configPath.absolutePath, fd.fd)
 
-        Log.i(TAG, "Tun2Socks started")
+        Log.i(TAG, "Tun2Socks started. ip: $ip port: $port")
     }
 
     private fun stopTun2Socks() {
         Log.i(TAG, "Stopping tun2socks")
 
-        TProxyService.TProxyStopService()
+        try {
+            TProxyService.TProxyStopService()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to stop TProxyService", e)
+        }
 
         try {
             File(cacheDir, "config.tmp").delete()
@@ -222,8 +266,12 @@ class ByeDpiVpnService : LifecycleVpnService() {
             Log.e(TAG, "Failed to delete config file", e)
         }
 
-        tunFd?.close() ?: Log.w(TAG, "VPN not running")
-        tunFd = null
+        try {
+            tunFd?.close()
+            tunFd = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to close tunFd", e)
+        }
 
         Log.i(TAG, "Tun2socks stopped")
     }
@@ -297,7 +345,37 @@ class ByeDpiVpnService : LifecycleVpnService() {
             builder.setMetered(false)
         }
 
-        builder.addDisallowedApplication(applicationContext.packageName)
+        val preferences = getPreferences()
+        val listType = preferences.getStringNotNull("applist_type", "disable")
+        val listedApps = preferences.getSelectedApps()
+
+        when (listType) {
+            "blacklist" -> {
+                for (packageName in listedApps) {
+                    try {
+                        builder.addDisallowedApplication(packageName)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Не удалось добавить приложение $packageName в черный список", e)
+                    }
+                }
+
+                builder.addDisallowedApplication(applicationContext.packageName)
+            }
+
+            "whitelist" -> {
+                for (packageName in listedApps) {
+                    try {
+                        builder.addAllowedApplication(packageName)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Не удалось добавить приложение $packageName в белый список", e)
+                    }
+                }
+            }
+
+            "disable" -> {
+                builder.addDisallowedApplication(applicationContext.packageName)
+            }
+        }
 
         return builder
     }
