@@ -4,8 +4,9 @@ import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
 import androidx.appcompat.app.AppCompatActivity
+import androidx.fragment.app.FragmentManager
 import io.github.dovecoteescapee.byedpi.R
-import io.github.dovecoteescapee.byedpi.fragments.SettingsFragment
+import io.github.dovecoteescapee.byedpi.fragments.MainSettingsFragment
 import io.github.dovecoteescapee.byedpi.utility.getPreferences
 
 class SettingsActivity : AppCompatActivity() {
@@ -15,7 +16,7 @@ class SettingsActivity : AppCompatActivity() {
 
         supportFragmentManager
             .beginTransaction()
-            .replace(R.id.settings, SettingsFragment())
+            .replace(R.id.settings, MainSettingsFragment())
             .commit()
 
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
@@ -33,14 +34,12 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         R.id.action_reset_settings -> {
-            getPreferences(this)
-                .edit()
-                .clear()
-                .apply()
+            getPreferences().edit().clear().apply()
 
+            supportFragmentManager.popBackStack(null, FragmentManager.POP_BACK_STACK_INCLUSIVE)
             supportFragmentManager
                 .beginTransaction()
-                .replace(R.id.settings, SettingsFragment())
+                .replace(R.id.settings, MainSettingsFragment())
                 .commit()
             true
         }

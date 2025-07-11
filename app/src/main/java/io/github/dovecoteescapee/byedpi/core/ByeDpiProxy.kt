@@ -2,7 +2,6 @@ package io.github.dovecoteescapee.byedpi.core
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.io.IOException
 
 class ByeDpiProxy {
     companion object {
@@ -14,8 +13,13 @@ class ByeDpiProxy {
     private val mutex = Mutex()
     private var fd = -1
 
-    suspend fun startProxy(preferences: ByeDpiProxyPreferences): Int =
-        jniStartProxy(createSocket(preferences))
+    suspend fun startProxy(preferences: ByeDpiProxyPreferences): Int {
+        val fd = createSocket(preferences)
+        if (fd < 0) {
+            return -1 // TODO: should be error code
+        }
+        return jniStartProxy(fd)
+    }
 
     suspend fun stopProxy(): Int {
         mutex.withLock {
@@ -37,35 +41,51 @@ class ByeDpiProxy {
                 throw IllegalStateException("Proxy is already running")
             }
 
-            val fd = jniCreateSocket(
+            val fd = createSocketFromPreferences(preferences)
+            if (fd < 0) {
+                return -1
+            }
+            this.fd = fd
+            fd
+        }
+
+    private fun createSocketFromPreferences(preferences: ByeDpiProxyPreferences) =
+        when (preferences) {
+            is ByeDpiProxyCmdPreferences -> jniCreateSocketWithCommandLine(preferences.args)
+
+            is ByeDpiProxyUIPreferences -> jniCreateSocket(
                 ip = preferences.ip,
                 port = preferences.port,
                 maxConnections = preferences.maxConnections,
                 bufferSize = preferences.bufferSize,
                 defaultTtl = preferences.defaultTtl,
+                customTtl = preferences.customTtl,
                 noDomain = preferences.noDomain,
-                desyncKnown = preferences.desyncKnown,
+                desyncHttp = preferences.desyncHttp,
+                desyncHttps = preferences.desyncHttps,
+                desyncUdp = preferences.desyncUdp,
                 desyncMethod = preferences.desyncMethod.ordinal,
                 splitPosition = preferences.splitPosition,
                 splitAtHost = preferences.splitAtHost,
                 fakeTtl = preferences.fakeTtl,
                 fakeSni = preferences.fakeSni,
-                oobData = preferences.oobData,
+                oobChar = preferences.oobChar,
                 hostMixedCase = preferences.hostMixedCase,
                 domainMixedCase = preferences.domainMixedCase,
                 hostRemoveSpaces = preferences.hostRemoveSpaces,
                 tlsRecordSplit = preferences.tlsRecordSplit,
                 tlsRecordSplitPosition = preferences.tlsRecordSplitPosition,
                 tlsRecordSplitAtSni = preferences.tlsRecordSplitAtSni,
+                hostsMode = preferences.hostsMode.ordinal,
+                hosts = preferences.hosts,
+                tcpFastOpen = preferences.tcpFastOpen,
+                udpFakeCount = preferences.udpFakeCount,
+                dropSack = preferences.dropSack,
+                fakeOffset = preferences.fakeOffset,
             )
-
-            if (fd < 0) {
-                throw IOException("Failed to create socket")
-            }
-
-            this.fd = fd
-            fd
         }
+
+    private external fun jniCreateSocketWithCommandLine(args: Array<String>): Int
 
     private external fun jniCreateSocket(
         ip: String,
@@ -73,20 +93,29 @@ class ByeDpiProxy {
         maxConnections: Int,
         bufferSize: Int,
         defaultTtl: Int,
+        customTtl: Boolean,
         noDomain: Boolean,
-        desyncKnown: Boolean,
+        desyncHttp: Boolean,
+        desyncHttps: Boolean,
+        desyncUdp: Boolean,
         desyncMethod: Int,
         splitPosition: Int,
         splitAtHost: Boolean,
         fakeTtl: Int,
         fakeSni: String,
-        oobData: String,
+        oobChar: Byte,
         hostMixedCase: Boolean,
         domainMixedCase: Boolean,
         hostRemoveSpaces: Boolean,
         tlsRecordSplit: Boolean,
         tlsRecordSplitPosition: Int,
         tlsRecordSplitAtSni: Boolean,
+        hostsMode: Int,
+        hosts: String?,
+        tcpFastOpen: Boolean,
+        udpFakeCount: Int,
+        dropSack: Boolean,
+        fakeOffset: Int,
     ): Int
 
     private external fun jniStartProxy(fd: Int): Int

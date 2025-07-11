@@ -1,10 +1,12 @@
 package io.github.dovecoteescapee.byedpi.activities
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -14,21 +16,15 @@ import android.view.MenuItem
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import io.github.dovecoteescapee.byedpi.R
-import io.github.dovecoteescapee.byedpi.data.AppStatus
-import io.github.dovecoteescapee.byedpi.data.FAILED_BROADCAST
-import io.github.dovecoteescapee.byedpi.data.Mode
-import io.github.dovecoteescapee.byedpi.data.SENDER
-import io.github.dovecoteescapee.byedpi.data.STARTED_BROADCAST
-import io.github.dovecoteescapee.byedpi.data.STOPPED_BROADCAST
-import io.github.dovecoteescapee.byedpi.data.Sender
-import io.github.dovecoteescapee.byedpi.fragments.SettingsFragment
+import io.github.dovecoteescapee.byedpi.data.*
+import io.github.dovecoteescapee.byedpi.fragments.MainSettingsFragment
 import io.github.dovecoteescapee.byedpi.databinding.ActivityMainBinding
 import io.github.dovecoteescapee.byedpi.services.ServiceManager
 import io.github.dovecoteescapee.byedpi.services.appStatus
-import io.github.dovecoteescapee.byedpi.utility.getPreferences
-import io.github.dovecoteescapee.byedpi.utility.mode
+import io.github.dovecoteescapee.byedpi.utility.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.IOException
@@ -42,7 +38,7 @@ class MainActivity : AppCompatActivity() {
         private fun collectLogs(): String? =
             try {
                 Runtime.getRuntime()
-                    .exec("logcat *:I -d")
+                    .exec("logcat *:D -d")
                     .inputStream.bufferedReader()
                     .use { it.readText() }
             } catch (e: Exception) {
@@ -151,9 +147,18 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val theme = getPreferences(this)
+        val theme = getPreferences()
             .getString("app_theme", null)
-        SettingsFragment.setTheme(theme ?: "system")
+        MainSettingsFragment.setTheme(theme ?: "system")
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        }
     }
 
     override fun onResume() {
@@ -203,7 +208,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun start() {
-        when (getPreferences(this).mode()) {
+        when (getPreferences().mode()) {
             Mode.VPN -> {
                 val intentPrepare = VpnService.prepare(this)
                 if (intentPrepare != null) {
@@ -226,9 +231,9 @@ class MainActivity : AppCompatActivity() {
 
         Log.i(TAG, "Updating status: $status, $mode")
 
-        val preferences = getPreferences(this)
-        val proxyIp = preferences.getString("byedpi_proxy_ip", null) ?: "127.0.0.1"
-        val proxyPort = preferences.getString("byedpi_proxy_port", null) ?: "1080"
+        val preferences = getPreferences()
+        val proxyIp = preferences.getStringNotNull("byedpi_proxy_ip", "127.0.0.1")
+        val proxyPort = preferences.getStringNotNull("byedpi_proxy_port", "1080")
         binding.proxyAddress.text = getString(R.string.proxy_address, proxyIp, proxyPort)
 
         when (status) {
